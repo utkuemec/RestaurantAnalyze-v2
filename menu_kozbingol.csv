@@ -1,0 +1,70 @@
+ID,Category,Item,Description,Price
+1,Appetizers,Mutabal,"A smoked eggplant dip with tahini, garlic, and lemon juice",9.99
+2,Appetizers,Baba GanoushHot Dip Ezme,"A blend of roasted eggplant, tahini, olive oil, lemon juice, and various seasonings",9.99
+3,Appetizers,Walnut Dip,Includes various sides and sauces as per restaurant's serving tradition,8.99
+4,Appetizers,Saksuka,Includes various sides and sauces as per restaurant's serving tradition,8.99
+5,Appetizers,Hummus,"A creamy spread made from mashed chickpeas, tahini, olive oil, lemon juice, and garlic",9.99
+6,Appetizers,Ordovr Plate,Includes various sides and sauces as per restaurant's serving tradition,19.99
+7,Main Courses,Beef Shish,"Beef Shish, marinated beef grilled on skewers, served with sides",31.99
+8,Main Courses,Lamb Shish,"Lamb Shish, marinated lamb grilled on skewers, often served with grilled vegetables",24.99
+9,Main Courses,Beef Shashlik,Includes various sides and sauces as per restaurant's serving tradition,32.99
+10,Main Courses,Grilled Meatballs,"Grilled Meatballs, served with tomato sauce and a choice of sides",34.99
+11,Main Courses,Adana Kebab,"Minced Lamb with Bulgur, Roasted Peppers and Tomatoes, Onions with Sumac, Small Lahmacun and Lavas Bread",24.99
+12,Main Courses,Lamb Ribs,Includes various sides and sauces as per restaurant's serving tradition,24.99
+13,Main Courses,Lamb Chops,Includes various sides and sauces as per restaurant's serving tradition,38.99
+14,Main Courses,Urfa Kebab,Includes various sides and sauces as per restaurant's serving tradition,34.99
+15,Main Courses,Chicken Pirzola,Includes various sides and sauces as per restaurant's serving tradition,24.99
+16,Main Courses,Chicken Wings,Includes various sides and sauces as per restaurant's serving tradition,24.99
+17,Main Courses,Chicken Shish,"Chicken Shish, typically includes marinated chicken grilled on skewers, served with sides",24.99
+18,Main Courses,Chicken Special,Includes various sides and sauces as per restaurant's serving tradition,21.99
+19,Main Courses,Beyti Kebab,Includes various sides and sauces as per restaurant's serving tradition,27.99
+20,Main Courses,Yoghurt Kebab,Includes various sides and sauces as per restaurant's serving tradition,29.99
+21,Main Courses,Ali Nazik,Includes various sides and sauces as per restaurant's serving tradition,27.99
+22,Main Courses,Bingol Mix Kebab,Includes various sides and sauces as per restaurant's serving tradition,37.99
+23,Main Courses,Antricot Steak,"Antricot Steak, served with broccoli, garlic sauce, cherry tomatoes, green peppers, and apple slice french fries",40.99
+24,Main Courses,Tenderloin Steak,Cooked With Butter On The Pan,42.99
+25,Main Courses,Beef Saute,Includes various sides and sauces as per restaurant's serving tradition,24.99
+26,Main Courses,Chicken Pan,Includes various sides and sauces as per restaurant's serving tradition,24.99
+27,Main Courses,Doner Pan,Includes various sides and sauces as per restaurant's serving tradition,26.99
+28,Main Courses,Kavurma,Includes various sides and sauces as per restaurant's serving tradition,24.99
+29,Main Courses,Iskender,Includes various sides and sauces as per restaurant's serving tradition,26.99
+30,Main Courses,Doner Plate,Includes various sides and sauces as per restaurant's serving tradition,19.99
+31,Sauces,Garlic Sauce,"A sauce made from crushed garlic, olive oil, lemon juice, and salt",2.0
+32,Sauces,Spicy Sauce,"A hot sauce made with a blend of spicy chillies, vinegar, and spices",3.0
+33,Sauces,Coctail Sauce,"A tangy sauce typically made with ketchup, horseradish, Worcestershire sauce, and lemon juice",4.0
+34,Seafood,Grilled Sea Bass,Includes various sides and sauces as per restaurant's serving tradition,31.99
+35,Seafood,Grilled Sea Bream,Includes various sides and sauces as per restaurant's serving tradition,14.99
+36,Seafood,Grilled Somon,Includes various sides and sauces as per restaurant's serving tradition,31.99
+37,Seafood,Fried Calamari,Includes various sides and sauces as per restaurant's serving tradition,31.99
+38,Pizzas & Pides,Lahmacun,Includes various sides and sauces as per restaurant's serving tradition,14.99
+39,Pizzas & Pides,Bingol Pizza,Includes various sides and sauces as per restaurant's serving tradition,19.99
+40,Pizzas & Pides,Spinach Pizza,Includes various sides and sauces as per restaurant's serving tradition,18.99
+41,Pizzas & Pides,Soujouk Pizza,Includes various sides and sauces as per restaurant's serving tradition,22.99
+42,Pizzas & Pides,Vegetable Pizza,Includes various sides and sauces as per restaurant's serving tradition,18.99
+43,Pizzas & Pides,Mushroom Pizza,Includes various sides and sauces as per restaurant's serving tradition,16.99
+44,Pizzas & Pides,Tuna Pizza,Includes various sides and sauces as per restaurant's serving tradition,18.99
+45,Pizzas & Pides,Cheese Pizza,Includes various sides and sauces as per restaurant's serving tradition,18.99
+46,Pizzas & Pides,Lamp Meat Pide,Includes various sides and sauces as per restaurant's serving tradition,22.99
+47,Pizzas & Pides,Soujouk Pide,Includes various sides and sauces as per restaurant's serving tradition,20.99
+48,Pizzas & Pides,Ground Beef Pide,Includes various sides and sauces as per restaurant's serving tradition,20.99
+49,Pizzas & Pides,Doner Pide,Includes various sides and sauces as per restaurant's serving tradition,20.99
+50,Pizzas & Pides,Mixed Pide,Includes various sides and sauces as per restaurant's serving tradition,23.99
+51,Pizzas & Pides,Spinach Pide (1),Includes various sides and sauces as per restaurant's serving tradition,18.99
+52,Pizzas & Pides,Cheese Pide,Includes various sides and sauces as per restaurant's serving tradition,17.99
+53,Pizzas & Pides,Spinach Pide (2),Includes various sides and sauces as per restaurant's serving tradition,18.99
+54,Pizzas & Pides,Vegetable Pide,Includes various sides and sauces as per restaurant's serving tradition,18.99
+55,Vegetarian,Falafel Plate,Includes various sides and sauces as per restaurant's serving tradition,15.99
+56,Fast Food,Hamburger,Includes various sides and sauces as per restaurant's serving tradition,16.99
+57,Fast Food,Cheeseburger,Includes various sides and sauces as per restaurant's serving tradition,17.99
+58,Fast Food,Chicken Nuggets,Includes various sides and sauces as per restaurant's serving tradition,12.99
+59,Sides,Fries,Includes various sides and sauces as per restaurant's serving tradition,3.99
+60,Desserts,Carrot Slice,Includes various sides and sauces as per restaurant's serving tradition,11.99
+61,Desserts,Baklava,Includes various sides and sauces as per restaurant's serving tradition,11.99
+62,Desserts,Sobiyet,Includes various sides and sauces as per restaurant's serving tradition,9.99
+63,Desserts,Kunefe,Includes various sides and sauces as per restaurant's serving tradition,11.99
+64,Desserts,Pumpkin Dessert,Includes various sides and sauces as per restaurant's serving tradition,9.99
+65,Desserts,Pistachio Rolls,Includes various sides and sauces as per restaurant's serving tradition,9.99
+66,Desserts,Cold Baklava,Includes various sides and sauces as per restaurant's serving tradition,11.99
+67,Desserts,Sutlac,Includes various sides and sauces as per restaurant's serving tradition,6.99
+68,Desserts,Kazandibi,Includes various sides and sauces as per restaurant's serving tradition,6.99
+69,Desserts,Mussel Baklava,Includes various sides and sauces as per restaurant's serving tradition,11.99

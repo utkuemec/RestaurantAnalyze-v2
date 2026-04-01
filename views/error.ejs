@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="theme-color" content="#1B2E5C">
+    <title>Error — MADO</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Dancing+Script:wght@600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/" class="navbar-brand">
+                <span class="logo-text">MADO</span>
+                <span class="logo-sub">Cafe &amp;<br>Bakery</span>
+            </a>
+            <div style="display:flex;align-items:center;">
+                <div class="navbar-links">
+                    <a href="/">Home</a>
+                    <a href="/recommend">Recommend</a>
+                    <a href="/menu">Full Menu</a>
+                </div>
+                <button class="navbar-cart" title="View Cart">&#128722;<span class="cart-badge"></span></button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="page-wrapper">
+        <div class="error-box">
+            <div class="icon">&#9888;&#65039;</div>
+            <h2>Something went wrong</h2>
+            <p><%= message %></p>
+            <a href="/" class="btn btn-primary">&#8592; Go Home</a>
+        </div>
+    </div>
+
+    <script src="/cart.js"></script>
+</body>
+</html>

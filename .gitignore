@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+venv/
+
+# Environment variables
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Large binary files
+cloudflared
+cloudflared.tgz
+MenuRecommendation.zip
+
+# IDE
+.vscode/
+
+# Rasa
+.rasa/
+
+# Models (large files)
+models/

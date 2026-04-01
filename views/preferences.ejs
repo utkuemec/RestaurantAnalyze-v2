@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="theme-color" content="#1B2E5C">
+    <title>MADO — A World of Flavour</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Dancing+Script:wght@600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+    <div class="scroll-progress"></div>
+
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/" class="navbar-brand">
+                <span class="logo-text">MADO</span>
+                <span class="logo-sub">Cafe &amp;<br>Bakery</span>
+            </a>
+            <div style="display:flex;align-items:center;">
+                <div class="navbar-links">
+                    <a href="/">Home</a>
+                    <a href="/recommend" class="active">Recommend</a>
+                    <a href="/menu">Full Menu</a>
+                </div>
+                <button class="navbar-cart" title="View Cart">&#128722;<span class="cart-badge"></span></button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="page-wrapper">
+
+        <div class="hero">
+            <div class="hero-tagline">150 Years of Delicacy</div>
+            <h1>Step into a world of<br><span class="highlight">flavour</span></h1>
+            <p>Tell us what you're craving and our AI will find the perfect dishes and drinks from our menu — just for you.</p>
+        </div>
+
+        <form action="/preferences" method="post" id="recommendationForm" onsubmit="return validateForm()">
+            <div class="card reveal">
+                <div class="card-title"><span class="icon">&#127869;</span> Tell Us Your Cravings</div>
+
+                <div class="form-row">
+                    <div class="form-group form-half">
+                        <label for="food">What do you want to eat?</label>
+                        <input type="text" class="form-input" id="food" name="food"
+                               placeholder="e.g. chicken, kebab, pizza, steak..."
+                               autocomplete="off">
+                    </div>
+                    <div class="form-group form-half">
+                        <label for="drink">What do you want to drink?</label>
+                        <input type="text" class="form-input" id="drink" name="drink"
+                               placeholder="e.g. coffee, tea, lemonade, ayran..."
+                               autocomplete="off">
+                    </div>
+                </div>
+
+                <input type="hidden" name="strategy" value="hybrid">
+
+                <button type="submit" class="btn btn-primary btn-block">
+                    Get Recommendations
+                </button>
+            </div>
+        </form>
+
+        <% if (picks && Object.keys(picks).length > 0) { %>
+        <div class="watercolor-divider"></div>
+
+        <div class="picks-section">
+            <h2 class="picks-section-title reveal">Chef's Picks</h2>
+            <p class="picks-section-subtitle reveal">Handpicked favourites from our kitchen</p>
+
+            <% Object.keys(picks).forEach(function(cat) { %>
+                <div class="picks-category reveal"><%= cat %></div>
+                <div class="picks-row stagger-children">
+                    <% picks[cat].forEach(function(item) { %>
+                        <div class="pick-card reveal" data-item="<%= item.name %>">
+                            <div class="pick-top">
+                                <span class="pick-name"><%= item.name %></span>
+                                <button class="add-cart-btn" data-item="<%= item.name %>" data-price="<%= item.price.toFixed(2) %>" data-category="<%= cat %>">
+                                    <span class="cart-icon">+</span> Add
+                                </button>
+                            </div>
+                            <div class="pick-desc"><%= item.description %></div>
+                            <div class="pick-price">$<%= item.price.toFixed(2) %></div>
+                        </div>
+                    <% }); %>
+                </div>
+            <% }); %>
+        </div>
+        <% } %>
+
+        <div class="footer">
+            <span class="footer-brand">MADO</span>
+            <div class="footer-tagline">Ice Cream &middot; Cafe &middot; Bakery</div>
+            <div class="footer-year">&copy; 2026 MADO Canada. All rights reserved.</div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+    <script src="/app.js"></script>
+    <script src="/cart.js"></script>
+    <script src="/chat-widget.js"></script>
+    <script>
+    function validateForm() {
+        var food = document.getElementById('food').value.trim();
+        var drink = document.getElementById('drink').value.trim();
+        if (!food && !drink) {
+            alert('Please fill in at least one field — food or drink.');
+            return false;
+        }
+        return true;
+    }
+    </script>
+</body>
+</html>

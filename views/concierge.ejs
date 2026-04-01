@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0F1D3B">
+    <title>MADO — Your Personal Concierge</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Dancing+Script:wght@600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body class="concierge-body">
+
+    <button id="splash-overlay" class="splash-overlay" aria-label="Tap to start MADO Concierge">
+        <span class="splash-content">
+            <span class="splash-brand">MADO</span>
+            <span class="splash-sub">Your Personal Concierge</span>
+            <span class="splash-mic-pulse">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" width="48" height="48">
+                    <rect x="9" y="1" width="6" height="11" rx="3"/>
+                    <path d="M19 10v1a7 7 0 01-14 0v-1"/>
+                    <line x1="12" y1="19" x2="12" y2="23"/>
+                    <line x1="8" y1="23" x2="16" y2="23"/>
+                </svg>
+            </span>
+            <span class="splash-tap">Tap anywhere to start</span>
+        </span>
+    </button>
+
+    <div class="concierge-top-bar">
+        <div></div>
+        <button class="concierge-cart-btn navbar-cart" title="View Cart">
+            &#128722;<span class="cart-badge"></span>
+        </button>
+    </div>
+
+    <div class="concierge-container">
+
+        <div class="concierge-logo">
+            <span class="concierge-brand">MADO</span>
+            <span class="concierge-brand-sub">Your Personal Concierge</span>
+        </div>
+
+        <div class="concierge-status" id="concierge-status">
+            <span class="status-dot"></span>
+            <span id="status-text">Initializing...</span>
+        </div>
+
+        <div class="concierge-transcript" id="transcript"></div>
+
+        <div class="concierge-controls">
+            <div class="lang-picker" id="lang-picker">
+                <span class="lang-picker-label">I'll speak in:</span>
+                <div class="lang-chips" id="lang-chips">
+                    <button class="lang-chip" data-lang="en-US">English</button>
+                    <button class="lang-chip" data-lang="tr-TR">T&#252;rk&#231;e</button>
+                    <button class="lang-chip" data-lang="fr-FR">Fran&#231;ais</button>
+                    <button class="lang-chip" data-lang="de-DE">Deutsch</button>
+                    <button class="lang-chip" data-lang="es-ES">Espa&#241;ol</button>
+                    <button class="lang-chip" data-lang="ar-SA">&#1575;&#1604;&#1593;&#1585;&#1576;&#1610;&#1577;</button>
+                    <button class="lang-chip" data-lang="ru-RU">&#1056;&#1091;&#1089;&#1089;&#1082;&#1080;&#1081;</button>
+                    <button class="lang-chip" data-lang="zh-CN">&#20013;&#25991;</button>
+                    <button class="lang-chip" data-lang="ja-JP">&#26085;&#26412;&#35486;</button>
+                    <button class="lang-chip" data-lang="ko-KR">&#54620;&#44397;&#50612;</button>
+                    <button class="lang-chip" data-lang="it-IT">Italiano</button>
+                    <button class="lang-chip" data-lang="pt-BR">Portugu&#234;s</button>
+                    <button class="lang-chip" data-lang="nl-NL">Nederlands</button>
+                    <button class="lang-chip" data-lang="pl-PL">Polski</button>
+                    <button class="lang-chip" data-lang="hi-IN">&#2361;&#2367;&#2344;&#2381;&#2342;&#2368;</button>
+                    <button class="lang-chip" data-lang="el-GR">&#917;&#955;&#955;&#951;&#957;&#953;&#954;&#940;</button>
+                    <button class="lang-chip" data-lang="uk-UA">&#1059;&#1082;&#1088;&#1072;&#1111;&#1085;&#1089;&#1100;&#1082;&#1072;</button>
+                    <button class="lang-chip" data-lang="sv-SE">Svenska</button>
+                </div>
+            </div>
+
+            <div class="mic-ring" id="mic-ring">
+                <button class="mic-btn" id="mic-btn" title="Tap to speak">
+                    <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="9" y="1" width="6" height="11" rx="3"/>
+                        <path d="M19 10v1a7 7 0 01-14 0v-1"/>
+                        <line x1="12" y1="19" x2="12" y2="23"/>
+                        <line x1="8" y1="23" x2="16" y2="23"/>
+                    </svg>
+                    <svg class="stop-icon" viewBox="0 0 24 24" fill="currentColor" style="display:none">
+                        <rect x="6" y="6" width="12" height="12" rx="2"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="mic-label" id="mic-label">Select your language, then tap to speak</div>
+        </div>
+
+    </div>
+
+    <div class="concierge-actions">
+        <a href="/recommend" class="action-card">
+            <span class="action-icon">&#127869;</span>
+            <span class="action-label">Get Recommendations</span>
+        </a>
+        <a href="/menu" class="action-card">
+            <span class="action-icon">&#128203;</span>
+            <span class="action-label">Full Menu</span>
+        </a>
+        <button class="action-card" id="type-instead-btn">
+            <span class="action-icon">&#9000;</span>
+            <span class="action-label">Type Instead</span>
+        </button>
+    </div>
+
+    <div id="text-chat-overlay" class="text-chat-overlay text-chat-hidden">
+        <div class="text-chat-panel">
+            <div class="text-chat-header">
+                <span class="text-chat-title">MADO Concierge</span>
+                <button id="text-chat-close">&times;</button>
+            </div>
+            <div class="text-chat-messages" id="text-chat-messages"></div>
+            <div class="text-chat-input-area">
+                <input type="text" id="text-chat-input" placeholder="Ask about our menu, ingredients, or what you're craving..." autocomplete="off">
+                <button id="text-chat-send">&#10148;</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+    <script src="/cart.js"></script>
+    <script src="/voice-concierge.js"></script>
+</body>
+</html>

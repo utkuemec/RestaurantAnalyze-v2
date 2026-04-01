@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="theme-color" content="#1B2E5C">
+    <title>Full Menu — MADO</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Dancing+Script:wght@600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+    <div class="scroll-progress"></div>
+
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="/" class="navbar-brand">
+                <span class="logo-text">MADO</span>
+                <span class="logo-sub">Cafe &amp;<br>Bakery</span>
+            </a>
+            <div style="display:flex;align-items:center;">
+                <div class="navbar-links">
+                    <a href="/">Home</a>
+                    <a href="/recommend">Recommend</a>
+                    <a href="/menu" class="active">Full Menu</a>
+                </div>
+                <button class="navbar-cart" title="View Cart">&#128722;<span class="cart-badge"></span></button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="page-wrapper">
+
+        <div class="hero">
+            <div class="hero-tagline">Explore Our Selection</div>
+            <h1>Our <span class="highlight">Menu</span></h1>
+            <p>Discover authentic cuisine and flavours. Add items to your cart to place an order.</p>
+        </div>
+
+        <%
+            function groupByCategory(items) {
+                var g = {};
+                items.forEach(function(i) { if (!g[i.category]) g[i.category] = []; g[i.category].push(i); });
+                return g;
+            }
+        %>
+
+        <h2 class="section-title reveal">Food</h2>
+        <% var fg = groupByCategory(data.Foods); %>
+        <% Object.keys(fg).forEach(function(cat) { %>
+            <div class="category-section reveal">
+                <div class="category-title"><%= cat %></div>
+                <table class="menu-table">
+                    <thead><tr><th>Item</th><th>Description</th><th>Price</th><th></th></tr></thead>
+                    <tbody>
+                        <% fg[cat].forEach(function(item) { %>
+                            <tr>
+                                <td><strong><%= item.name %></strong></td>
+                                <td><%= item.description %></td>
+                                <td class="price-col">$<%= item.price.toFixed(2) %></td>
+                                <td><button class="add-cart-btn-sm" data-item="<%= item.name %>" data-price="<%= item.price.toFixed(2) %>" data-category="<%= cat %>"><span class="cart-icon">+</span> Add</button></td>
+                            </tr>
+                        <% }); %>
+                    </tbody>
+                </table>
+            </div>
+        <% }); %>
+
+        <div class="watercolor-divider"></div>
+
+        <h2 class="section-title reveal">Drinks</h2>
+        <% var dg = groupByCategory(data.Drinks); %>
+        <% Object.keys(dg).forEach(function(cat) { %>
+            <div class="category-section reveal">
+                <div class="category-title"><%= cat %></div>
+                <table class="menu-table">
+                    <thead><tr><th>Item</th><th>Description</th><th>Price</th><th></th></tr></thead>
+                    <tbody>
+                        <% dg[cat].forEach(function(item) { %>
+                            <tr>
+                                <td><strong><%= item.name %></strong></td>
+                                <td><%= item.description %></td>
+                                <td class="price-col">$<%= item.price.toFixed(2) %></td>
+                                <td><button class="add-cart-btn-sm" data-item="<%= item.name %>" data-price="<%= item.price.toFixed(2) %>" data-category="<%= cat %>"><span class="cart-icon">+</span> Add</button></td>
+                            </tr>
+                        <% }); %>
+                    </tbody>
+                </table>
+            </div>
+        <% }); %>
+
+        <div style="text-align:center; margin-top: 2rem;" class="reveal">
+            <a href="/recommend" class="btn btn-gold">Get Personalized Recommendations</a>
+        </div>
+
+        <div class="footer">
+            <span class="footer-brand">MADO</span>
+            <div class="footer-tagline">Ice Cream &middot; Cafe &middot; Bakery</div>
+            <div class="footer-year">&copy; 2026 MADO Canada. All rights reserved.</div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+    <script src="/app.js"></script>
+    <script src="/cart.js"></script>
+    <script src="/chat-widget.js"></script>
+</body>
+</html>
