@@ -6,21 +6,99 @@ const bodyParser = require('body-parser');
 const fetch = require('node-fetch');
 const crypto = require('crypto');
 const cookieParser = require('cookie-parser');
+const { spawn } = require('child_process');
+const net = require('net');
 
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.use(express.static(path.join(__dirname, 'public')));
-app.use(bodyParser.json());
+app.use(bodyParser.json({ limit: '10mb' }));
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-const FLASK_API = 'http://127.0.0.1:5008';
+/** Set FLASK_API in .env to use an already-running Flask; otherwise Node spawns Flask on a free port. */
+var FLASK_API = (process.env.FLASK_API || '').trim();
+var flaskChild = null;
 
-// ---------- AI Chat Setup (Groq primary → Gemini fallback) ------------------
+function getFreePort() {
+    return new Promise(function(resolve, reject) {
+        var s = net.createServer();
+        s.on('error', reject);
+        s.listen(0, '127.0.0.1', function() {
+            var p = s.address().port;
+            s.close(function() { resolve(p); });
+        });
+    });
+}
 
+function waitForFlask(base, maxMs) {
+    var start = Date.now();
+    return new Promise(function tryOnce(resolve, reject) {
+        if (Date.now() - start > maxMs) {
+            return reject(new Error('Flask did not become ready within ' + maxMs + 'ms'));
+        }
+        fetch(base + '/api/stats')
+            .then(function(r) {
+                if (r.ok) return resolve();
+                setTimeout(function() { tryOnce(resolve, reject); }, 400);
+            })
+            .catch(function() {
+                setTimeout(function() { tryOnce(resolve, reject); }, 400);
+            });
+    });
+}
+
+function ensureFlask() {
+    if (FLASK_API) {
+        console.log('Using FLASK_API=' + FLASK_API + ' (Flask auto-spawn skipped)');
+        return Promise.resolve();
+    }
+    return getFreePort().then(function(port) {
+        FLASK_API = 'http://127.0.0.1:' + port;
+        var py = process.env.PYTHON || 'python3';
+        flaskChild = spawn(py, [path.join(__dirname, 'app.py')], {
+            cwd: __dirname,
+            env: Object.assign({}, process.env, { FLASK_INTERNAL_PORT: String(port) }),
+            stdio: ['ignore', 'inherit', 'inherit'],
+        });
+        flaskChild.on('exit', function(code, sig) {
+            if (code !== 0 && code !== null) {
+                console.log('Flask process exited with code ' + code + (sig ? ' signal ' + sig : ''));
+            }
+        });
+        console.log('Started Flask (Python) on internal port ' + port);
+        return waitForFlask(FLASK_API, 120000);
+    }).then(function() {
+        console.log('Flask is ready at ' + FLASK_API);
+    });
+}
+
+// ---------- AI Chat Setup (Claude primary → Groq → Gemini fallback) ----------
+
+var claudeProvider = null;
 var groqProvider = null;
 var geminiProvider = null;
 var chatProvider = null;
+
+if (process.env.ANTHROPIC_API_KEY) {
+    var Anthropic = require('@anthropic-ai/sdk');
+    var anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    claudeProvider = {
+        name: 'Claude',
+        send: async function(systemPrompt, messages) {
+            var msgs = [];
+            messages.forEach(function(m) { msgs.push({ role: m.role, content: m.content }); });
+            var result = await anthropicClient.messages.create({
+                model: 'claude-haiku-4-5-20251001',
+                max_tokens: 1024,
+                system: systemPrompt,
+                messages: msgs,
+            });
+            return result.content[0].text;
+        },
+    };
+    console.log('Chat: Claude ready (Haiku 4.5 — fast)');
+}
 
 if (process.env.GROQ_API_KEY) {
     var Groq = require('groq-sdk');
@@ -79,26 +157,27 @@ if (process.env.GEMINI_API_KEY) {
     console.log('Chat: Gemini ready (2.0 Flash)');
 }
 
-// Combined provider: tries Groq first, falls back to Gemini
-if (groqProvider || geminiProvider) {
+// Combined provider: Claude (best) → Groq → Gemini
+var providers = [];
+if (claudeProvider) providers.push(claudeProvider);
+if (groqProvider) providers.push(groqProvider);
+if (geminiProvider) providers.push(geminiProvider);
+
+if (providers.length > 0) {
     chatProvider = {
-        name: groqProvider && geminiProvider ? 'Groq + Gemini' : (groqProvider || geminiProvider).name,
+        name: providers.map(function(p) { return p.name; }).join(' + '),
         send: async function(systemPrompt, messages) {
-            if (groqProvider) {
+            for (var i = 0; i < providers.length; i++) {
                 try {
-                    return await groqProvider.send(systemPrompt, messages);
+                    return await providers[i].send(systemPrompt, messages);
                 } catch (err) {
-                    if (geminiProvider) {
-                        console.log('Chat: Groq failed (' + (err.status || err.message) + '), falling back to Gemini');
-                    } else {
-                        throw err;
+                    if (i < providers.length - 1) {
+                        console.log('Chat: ' + providers[i].name + ' failed (' + (err.status || err.message) + '), trying ' + providers[i + 1].name);
+                        continue;
                     }
+                    throw err;
                 }
             }
-            if (geminiProvider) {
-                return await geminiProvider.send(systemPrompt, messages);
-            }
-            throw new Error('No chat provider available');
         },
     };
     console.log('Chat: active provider chain — ' + chatProvider.name);
@@ -128,10 +207,16 @@ async function getMenuText() {
 
 var SYSTEM_PROMPT = `You are a friendly waiter at MADO, a famous Turkish café/restaurant (ice cream, baklavas, kebabs). Be warm, helpful, and conversational — like a real waiter. Keep replies natural length (2-4 sentences typical, longer if listing items).
 
-LANGUAGE RULE (#1 PRIORITY): Reply ENTIRELY in the customer's language. If they write Turkish, reply in Turkish. French→French. Arabic→Arabic. Any language→same language.
-MENU ITEM TRANSLATION: When replying in a non-English language, you MUST use the translated menu item names from the TRANSLATED MENU REFERENCE section (appended at the end of this prompt). Use those exact translated names — NEVER use the English name in your reply text. If no translated reference is provided, translate the menu item names yourself naturally.
-EXCEPTION: Inside [ADD_TO_CART: ...] tags, ALWAYS use the ORIGINAL ENGLISH menu name exactly as listed in the MENU section.
-Translate naturally — do NOT put the English name in parentheses.
+LANGUAGE RULE (#1 PRIORITY — ABSOLUTE):
+Reply ENTIRELY in the customer's language. If they write Turkish, reply 100% in Turkish. French→100% French. Arabic→100% Arabic. ANY language→100% that language.
+ZERO ENGLISH WORDS ALLOWED in non-English replies. Use proper CULINARY terminology (e.g. Turkish: "Dana" for beef/veal, NOT "İnek" which means cow; "Kuzu" for lamb, NOT "Koyun" which means sheep). This means:
+- ALL menu item names must be translated (use the TRANSLATED MENU REFERENCE section at the end of this prompt)
+- ALL descriptive words must be in the target language (e.g. "thinly sliced" → "ince dilimlenmiş" in Turkish, "tranché finement" in French)
+- ALL cooking terms, adjectives, and adverbs must be in the target language (NEVER "special", "served", "grilled", "fresh", "homemade" etc. in English)
+- Every single word in your reply must be in the customer's language. Not a SINGLE English word.
+ONLY EXCEPTION: Inside [ADD_TO_CART: ...] tags, use the ORIGINAL ENGLISH menu name.
+If no TRANSLATED MENU REFERENCE is provided, translate all menu names yourself naturally.
+Do NOT put English names in parentheses.
 If the message starts with [IMPORTANT: ...], follow that language instruction absolutely.
 
 DRINK-FOOD PAIRING (follow these STRICTLY):
@@ -150,16 +235,21 @@ ORDERING — THESE RULES ARE CRITICAL, READ CAREFULLY:
 WHEN TO ADD (use [ADD_TO_CART: exact item name]):
 - Customer says an EXACT menu item name + clear order word: "I want the Iskender Kebab", "Ayran istiyorum", "Give me a Turkish Coffee", "Chicken Shish Kebab lütfen"
 - Customer confirms YOUR specific suggestion: you said "Would you like the Adana Kebab?" and they say "Yes" / "Evet" / "Sure"
-- Customer orders multiple specific items: "I want Ayran and also the Baklava" → add both
+- Customer orders multiple specific items: "Adana kebap istiyorum yanına da ayran" → you MUST add BOTH: [ADD_TO_CART: Adana Kebab] AND [ADD_TO_CART: Ayran]. NEVER skip any ordered item.
+- CRITICAL: When a customer mentions MULTIPLE items they want to order, add ALL of them with separate [ADD_TO_CART] tags. Do NOT skip any.
 
-WHEN TO NEVER ADD (NO [ADD_TO_CART] tag at all):
+WHEN TO NEVER ADD (NO [ADD_TO_CART] tag at all — CRITICAL):
+- Customer asks about items: "What is X?", "Tell me about X", "What's the difference between X and Y?"
 - Customer asks for recommendations: "What do you suggest?", "önerir misin?", "what's good with kebab?"
 - Customer is browsing: "What are the drinks?", "Tell me about desserts", "What kebabs do you have?"
 - Customer is vague: "I want something nice", "kebab istiyorum", "I feel like chicken"
 - YOU are recommending/suggesting items: when YOU say "I recommend Ayran", do NOT add Ayran to cart — wait for the customer to confirm
 - Customer says "I want something with kebab" = asking for pairing suggestion, NOT ordering
+- Customer is comparing items: "difference between X and Y", "which is better X or Y"
+- Customer is asking questions about ingredients, preparation, or descriptions
 
-The KEY test: Did the customer say the EXACT name of a menu item AND clearly want to order it? If NO → just recommend, don't add. If YES → add with [ADD_TO_CART: exact name].
+The KEY test: Did the customer say the EXACT name of a menu item AND use a CLEAR ORDER WORD (want, give me, I'll have, order, lütfen, istiyorum, je voudrais, etc.)? If NO → just answer/recommend, NEVER add. If YES → add with [ADD_TO_CART: exact name].
+When in doubt, do NOT add to cart. It is MUCH better to NOT add something than to add it incorrectly.
 - A message can contain BOTH an order AND a question. Example: "Yes I wanna Iskender Kebab and recommend me a dessert" → ADD Iskender Kebab [ADD_TO_CART: Iskender Kebab] AND recommend desserts. The "recommend" part does NOT cancel the order part.
 
 TAG FORMAT: Always write [ADD_TO_CART: Item Name] exactly using the ENGLISH menu name. Never shorten to [Item] or skip the tag.
@@ -182,6 +272,10 @@ SPEECH RECOGNITION ERRORS: Customers use voice input. The speech-to-text often g
 - "la vash" → Lavash
 - "man tea/mon tea" → Manti
 If the customer's words sound PHONETICALLY similar to a menu item, assume they mean that item and respond accordingly. Ask for confirmation if unsure: "Did you mean Iskender Kebab?"
+
+TURKISH SPELLING VARIANTS (always map to the English menu name in [ADD_TO_CART]):
+"kebap" = "Kebab", "köfte" = "Kofte", "şiş" = "Shish", "döner" = "Doner", "künefe" = "Kunefe", "mantı" = "Manti", "gözleme" = "Gozleme", "börek" = "Borek", "ayran" = "Ayran", "şakşuka" = "Shakshuka", "simit" = "Simit", "lahmacun" = "Lahmacun"
+So "Adana kebap istiyorum" → [ADD_TO_CART: Adana Kebab], "İskender kebap istiyorum" → [ADD_TO_CART: Iskender Kebab]
 
 Only recommend items from the menu below.
 `;
@@ -276,11 +370,15 @@ async function processTranslationQueue() {
             if (!items.length) continue;
 
             console.log('Translation cache: generating ' + langName + ' (' + items.length + ' items)...');
-            var sysPrompt = 'You are a professional food menu translator. Return ONLY valid JSON. No markdown fences, no explanation.';
+            var sysPrompt = 'You are a professional restaurant menu translator with deep knowledge of culinary terminology. Return ONLY valid JSON. No markdown fences, no explanation.';
             var prompt = 'Translate ALL of these restaurant menu items from English to ' + langName + '.\n' +
                 'Return a JSON object: {"English Name": "' + langName + ' Translation"}\n' +
-                'Rules: translate naturally as a native ' + langName + ' speaker. Keep brand names (MADO, Perrier, Red Bull, Ferrero Rocher, Oreo, San Pellegrino) unchanged.\n' +
-                'Keep culinary loanwords commonly used in ' + langName + '.\n' +
+                'CRITICAL RULES:\n' +
+                '- Use proper CULINARY/RESTAURANT terminology, NOT literal animal names. For example: "Beef" in Turkish is "Dana" (veal) NOT "İnek" (cow). "Lamb" is "Kuzu" NOT "Koyun". "Chicken" is "Tavuk".\n' +
+                '- Translate as a native ' + langName + ' chef/restaurant owner would write a menu.\n' +
+                '- Keep brand names (MADO, Perrier, Red Bull, Ferrero Rocher, Oreo, San Pellegrino) unchanged.\n' +
+                '- Keep culinary loanwords commonly used in ' + langName + '.\n' +
+                '- Use the most natural, appetizing restaurant terminology in ' + langName + '.\n' +
                 'You MUST translate ALL ' + items.length + ' items. Return ONLY the JSON object.\n\n' +
                 items.join('\n');
 
@@ -353,23 +451,6 @@ function buildTranslatedMenuRef(translations) {
     return lines.join('\n');
 }
 
-function buildWordMap(translations) {
-    var wordMap = {};
-    Object.keys(translations).forEach(function(en) {
-        var tr = translations[en];
-        if (en === tr) return;
-        var enWords = en.split(/\s+/);
-        var trWords = tr.split(/\s+/);
-        if (enWords.length === 1 && trWords.length >= 1) {
-            wordMap[enWords[0]] = trWords.join(' ');
-        } else if (enWords.length === 2 && trWords.length >= 1) {
-            wordMap[en] = tr;
-            if (enWords[0].length > 3) wordMap[enWords[0]] = trWords[0];
-        }
-    });
-    return wordMap;
-}
-
 function postProcessTranslation(reply, translations) {
     if (!translations) return reply;
 
@@ -387,18 +468,81 @@ function postProcessTranslation(reply, translations) {
         }
     });
 
-    var wordMap = buildWordMap(translations);
-    var wordKeys = Object.keys(wordMap).sort(function(a, b) { return b.length - a.length; });
-    wordKeys.forEach(function(en) {
-        var regex = new RegExp('\\b' + en.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'g');
-        result = result.replace(regex, wordMap[en]);
-    });
-
     tags.forEach(function(tag, i) {
         result = result.split('\x00TAG' + i + '\x00').join(tag);
     });
 
     return result;
+}
+
+// Backup: detect ordered items in user message and inject [ADD_TO_CART] if AI forgot
+var ORDER_WORDS_PATTERN = /\b(istiyorum|want|give me|i'll have|order|lütfen|s'il vous plaît|je voudrais|quiero|ich möchte|voglio|я хочу|أريد|주세요|ください|我要|gostaria|alayım|alırım|getir|ver)\b/i;
+var RECOMMEND_WORDS_PATTERN = /\b(öner|recommend|suggest|what do you have|ne var|ne öner|çeşit|seçenek|options|menü|which|hangisi|tavsiye|conseille|empfehle|recomiend|consiglia|порекоменд|what.*good|neler var|fark|difference|compare|karşılaştır|arasındaki)\b/i;
+
+function normalizeForMatch(text) {
+    return text.toLowerCase()
+        .replace(/kebap/g, 'kebab')
+        .replace(/köfte/g, 'kofte')
+        .replace(/şiş/g, 'shish')
+        .replace(/döner/g, 'doner')
+        .replace(/künefe/g, 'kunefe')
+        .replace(/mantı/g, 'manti')
+        .replace(/göz?leme/g, 'gozleme')
+        .replace(/börek/g, 'borek')
+        .replace(/ç/g, 'c').replace(/ş/g, 's').replace(/ğ/g, 'g')
+        .replace(/ı/g, 'i').replace(/ö/g, 'o').replace(/ü/g, 'u')
+        .replace(/é/g, 'e').replace(/è/g, 'e').replace(/ê/g, 'e')
+        .replace(/ä/g, 'a').replace(/ñ/g, 'n');
+}
+
+function detectMissingCartTags(userMsg, aiReply, menuItemNames) {
+    if (!menuItemNames || !menuItemNames.length) return aiReply;
+    if (/\[ADD_TO_CART:/i.test(aiReply)) return aiReply;
+
+    var cleanMsg = userMsg.replace(/\[IMPORTANT:[^\]]*\]/gi, '').trim();
+    if (!cleanMsg) return aiReply;
+
+    if (RECOMMEND_WORDS_PATTERN.test(cleanMsg)) return aiReply;
+
+    if (!ORDER_WORDS_PATTERN.test(cleanMsg)) return aiReply;
+
+    var msgNorm = normalizeForMatch(cleanMsg);
+    var matched = [];
+    var sorted = menuItemNames.slice().sort(function(a, b) { return b.length - a.length; });
+
+    sorted.forEach(function(name) {
+        var nameNorm = normalizeForMatch(name);
+        if (msgNorm.indexOf(nameNorm) !== -1) {
+            matched.push(name);
+            msgNorm = msgNorm.split(nameNorm).join('');
+        }
+    });
+
+    if (matched.length === 0) {
+        var msgWords = msgNorm.split(/\s+/);
+        sorted.forEach(function(name) {
+            var nameNorm = normalizeForMatch(name);
+            var nameWords = nameNorm.split(/\s+/).filter(function(w) { return w.length > 3; });
+            if (nameWords.length === 0) return;
+            var hits = 0;
+            nameWords.forEach(function(nw) {
+                msgWords.forEach(function(mw) {
+                    if (mw.indexOf(nw) !== -1 || nw.indexOf(mw) !== -1) hits++;
+                });
+            });
+            if (hits >= nameWords.length) {
+                matched.push(name);
+            }
+        });
+    }
+
+    if (matched.length > 0) {
+        var tags = matched.map(function(name) { return '[ADD_TO_CART: ' + name + ']'; }).join(' ');
+        console.log('Cart backup: injected tags for: ' + matched.join(', '));
+        return tags + ' ' + aiReply;
+    }
+
+    return aiReply;
 }
 
 function getUserId(req, res) {
@@ -520,6 +664,140 @@ app.get('/api/stats', async function(req, res) {
     }
 });
 
+// ---------- Speech-to-Text (Groq Whisper — accurate multilingual) ------------
+
+var multer = require('multer');
+var upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+var WHISPER_LANG_MAP = {
+    'en-US': 'en', 'tr-TR': 'tr', 'fr-FR': 'fr', 'de-DE': 'de', 'es-ES': 'es',
+    'ar-SA': 'ar', 'ru-RU': 'ru', 'zh-CN': 'zh', 'ja-JP': 'ja', 'ko-KR': 'ko',
+    'it-IT': 'it', 'pt-BR': 'pt', 'nl-NL': 'nl', 'pl-PL': 'pl', 'hi-IN': 'hi',
+    'el-GR': 'el', 'uk-UA': 'uk', 'sv-SE': 'sv',
+};
+
+var whisperPromptCache = null;
+
+async function getWhisperPrompt() {
+    if (whisperPromptCache) return whisperPromptCache;
+    try {
+        var items = await extractMenuItemNames();
+        var short = items.slice(0, 25).map(function(n) {
+            return n.split(' ').slice(0, 3).join(' ');
+        });
+        var prompt = 'MADO restaurant: ' + short.join(', ');
+        if (prompt.length > 800) prompt = prompt.substring(0, 800);
+        whisperPromptCache = prompt;
+    } catch (e) {
+        whisperPromptCache = 'MADO restaurant: Kebab, Ayran, Baklava, Kunefe, Iskender, Adana, Beyti, Gozleme, Manti, Lahmacun.';
+    }
+    return whisperPromptCache;
+}
+
+var HALLUCINATION_RE = /(subscribe|subtitl|sous.?titr|copyright|all rights|thank you for watch|vampire|sourcesub|amara\.org|请订阅|ご視聴|Abone ol|Altyaz|openai|whisper|captioning|untertitel|Gesellschaft|Radio.Canada|Merci d.avoir regard)/i;
+var HALLUCINATION_DATE_RE = /\b(january|february|march|april|june|july|august|september|october|november|december)\s+\d{1,2},?\s*\d{4}\b/i;
+var ENGLISH_NOISE_RE = /\b(maximizes?|rule|causes?|reality|vampire|dario|source\s*sub|AIT.?E)\b/i;
+
+function isLikelyHallucination(text, expectedLang) {
+    if (!text || text.length < 3) return true;
+    if (HALLUCINATION_RE.test(text)) return true;
+    if (HALLUCINATION_DATE_RE.test(text)) return true;
+    if (expectedLang !== 'en' && ENGLISH_NOISE_RE.test(text)) return true;
+    return false;
+}
+
+async function transcribeWithGroq(buffer, origName, contentType, whisperLang, prompt) {
+    var { File } = require('buffer');
+    var audioFile = new File([buffer], origName, { type: contentType });
+    var result = await groqClient.audio.transcriptions.create({
+        file: audioFile,
+        model: 'whisper-large-v3',
+        language: whisperLang,
+        temperature: 0.0,
+        prompt: prompt,
+    });
+    return (result.text || '').trim();
+}
+
+async function transcribeWithGemini(buffer, contentType, lang) {
+    if (!process.env.GEMINI_API_KEY) throw new Error('No Gemini key');
+    var { GoogleGenerativeAI } = require('@google/generative-ai');
+    var genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+    var langFullName = LANG_NAMES[lang] || lang;
+    var base64Audio = buffer.toString('base64');
+    var mimeType = contentType || 'audio/webm';
+    var promptText = 'Transcribe this audio exactly as spoken. The speaker is speaking ' + langFullName + '. Return ONLY the transcribed text, nothing else. No explanations, no labels, no quotes.';
+
+    var models = ['gemini-2.0-flash', 'gemini-1.5-flash'];
+    for (var i = 0; i < models.length; i++) {
+        try {
+            var model = genAI.getGenerativeModel({ model: models[i] });
+            var result = await model.generateContent([
+                { inlineData: { mimeType: mimeType, data: base64Audio } },
+                { text: promptText },
+            ]);
+            return (result.response.text() || '').trim();
+        } catch (e) {
+            if (i < models.length - 1 && e.message && e.message.indexOf('429') !== -1) {
+                console.log('Gemini STT: ' + models[i] + ' rate limited, trying ' + models[i + 1]);
+                continue;
+            }
+            throw e;
+        }
+    }
+    throw new Error('All Gemini models exhausted');
+}
+
+app.post('/api/transcribe', upload.single('audio'), async function(req, res) {
+    if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ error: 'no_audio', text: '' });
+    }
+
+    var lang = req.body.lang || 'en-US';
+    var whisperLang = WHISPER_LANG_MAP[lang] || lang.split('-')[0] || 'en';
+
+    var origName = req.file.originalname || 'audio.webm';
+    var contentType = req.file.mimetype || 'audio/webm';
+    if (origName.endsWith('.mp4')) contentType = 'audio/mp4';
+    if (origName.endsWith('.ogg')) contentType = 'audio/ogg';
+
+    console.log('Transcribe: received ' + req.file.buffer.length + ' bytes, name=' + origName + ', mime=' + contentType + ', lang=' + whisperLang);
+
+    var text = '';
+
+    if (groqClient) {
+        try {
+            var prompt = await getWhisperPrompt();
+            text = await transcribeWithGroq(req.file.buffer, origName, contentType, whisperLang, prompt);
+            console.log('Whisper [' + whisperLang + ']: "' + text + '"');
+        } catch (e) {
+            console.log('Groq Whisper failed (' + (e.status || e.message) + '), trying Gemini...');
+            text = '';
+        }
+    }
+
+    if (!text || isLikelyHallucination(text, whisperLang)) {
+        if (text) console.log('Whisper: REJECTED hallucination: "' + text + '"');
+        try {
+            text = await transcribeWithGemini(req.file.buffer, contentType, whisperLang);
+            console.log('Gemini STT [' + whisperLang + ']: "' + text + '"');
+        } catch (e2) {
+            console.error('Gemini STT also failed:', e2.message);
+            if (!text || isLikelyHallucination(text, whisperLang)) {
+                return res.json({ text: '' });
+            }
+        }
+    }
+
+    if (isLikelyHallucination(text, whisperLang)) {
+        console.log('STT: REJECTED final hallucination: "' + text + '"');
+        return res.json({ text: '' });
+    }
+
+    res.json({ text: text });
+});
+
 // ---------- TTS (Edge Neural voices via msedge-tts) --------------------------
 
 var EdgeTTS = require('msedge-tts');
@@ -554,23 +832,46 @@ function getTTSVoice(lang) {
     return 'en-US-JennyNeural';
 }
 
+function generateTTSBuffer(text, lang) {
+    return new Promise(async function(resolve, reject) {
+        try {
+            var tts = new EdgeTTS.MsEdgeTTS();
+            await tts.setMetadata(getTTSVoice(lang), EdgeTTS.OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
+            var result = tts.toStream(text);
+            var audioStream = result.audioStream;
+            var chunks = [];
+            audioStream.on('data', function(chunk) { chunks.push(chunk); });
+            audioStream.on('close', function() { resolve(Buffer.concat(chunks)); });
+            audioStream.on('error', reject);
+        } catch (e) {
+            reject(e);
+        }
+    });
+}
+
+// Pre-generated TTS cache: chat endpoint starts TTS before sending response
+var ttsPreCache = {};
+var TTS_CACHE_TTL = 30000;
+
+function preGenerateTTS(text, lang, key) {
+    ttsPreCache[key] = { promise: generateTTSBuffer(text, lang), ts: Date.now() };
+    setTimeout(function() { delete ttsPreCache[key]; }, TTS_CACHE_TTL);
+}
+
 app.post('/api/tts', async function(req, res) {
     var text = (req.body.text || '').trim();
     var lang = req.body.lang || 'en-US';
-    if (!text) return res.status(400).json({ error: 'No text' });
+    var ttsKey = req.body.ttsKey || '';
+    if (!text && !ttsKey) return res.status(400).json({ error: 'No text' });
 
     try {
-        var tts = new EdgeTTS.MsEdgeTTS();
-        await tts.setMetadata(getTTSVoice(lang), EdgeTTS.OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
-        var result = tts.toStream(text);
-        var audioStream = result.audioStream;
-        var chunks = [];
-        audioStream.on('data', function(chunk) { chunks.push(chunk); });
-        await new Promise(function(resolve, reject) {
-            audioStream.on('close', resolve);
-            audioStream.on('error', reject);
-        });
-        var buffer = Buffer.concat(chunks);
+        var buffer;
+        if (ttsKey && ttsPreCache[ttsKey]) {
+            buffer = await ttsPreCache[ttsKey].promise;
+            delete ttsPreCache[ttsKey];
+        } else {
+            buffer = await generateTTSBuffer(text, lang);
+        }
         res.set('Content-Type', 'audio/mpeg');
         res.send(buffer);
     } catch (e) {
@@ -583,7 +884,7 @@ app.post('/api/tts', async function(req, res) {
 
 app.post('/api/chat', async function(req, res) {
     if (!chatProvider) {
-        return res.json({ reply: "Chat is not configured. Set GROQ_API_KEY or GEMINI_API_KEY to enable AI chat." });
+        return res.json({ reply: "Chat is not configured. Set ANTHROPIC_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY to enable AI chat." });
     }
     try {
         var menuText = await getMenuText();
@@ -595,10 +896,9 @@ app.post('/api/chat', async function(req, res) {
         history.forEach(function(m) { messages.push({ role: m.role, content: m.content }); });
         messages.push({ role: 'user', content: userMessage });
 
-        var timedOut = false;
         var timer;
         var timeoutPromise = new Promise(function(_, reject) {
-            timer = setTimeout(function() { timedOut = true; reject(new Error('timeout')); }, 45000);
+            timer = setTimeout(function() { reject(new Error('timeout')); }, 45000);
         });
         var lang = req.body.lang || '';
         var translations = getMenuTranslations(lang);
@@ -609,8 +909,20 @@ app.post('/api/chat', async function(req, res) {
             timeoutPromise
         ]);
         clearTimeout(timer);
+
+        var items = await extractMenuItemNames();
+        rawReply = detectMissingCartTags(userMessage, rawReply, items);
+
         var reply = postProcessTranslation(rawReply, translations);
-        res.json({ reply: reply });
+
+        var cleanForTTS = reply.replace(/\[ADD_TO_CART:[^\]]*\]/g, '').replace(/\*\*/g, '').replace(/\s{2,}/g, ' ').trim();
+        var ttsKey = '';
+        if (cleanForTTS && lang) {
+            ttsKey = crypto.randomBytes(8).toString('hex');
+            preGenerateTTS(cleanForTTS, lang, ttsKey);
+        }
+
+        res.json({ reply: reply, ttsKey: ttsKey });
     } catch (e) {
         console.error('Chat error:', e.message);
         var msg = e.message === 'timeout'
@@ -653,6 +965,31 @@ app.get('/api/orders', function(req, res) {
     res.json(orders);
 });
 
-app.listen(3001, '127.0.0.1', function() {
-    console.log('Server is running on http://localhost:3001');
+function shutdownFlask() {
+    if (flaskChild && !flaskChild.killed) {
+        flaskChild.kill('SIGTERM');
+    }
+}
+
+process.on('SIGINT', function() {
+    shutdownFlask();
+    process.exit(0);
 });
+process.on('SIGTERM', function() {
+    shutdownFlask();
+    process.exit(0);
+});
+
+var listenPort = parseInt(process.env.PORT || '3001', 10);
+
+ensureFlask()
+    .then(function() {
+        app.listen(listenPort, '127.0.0.1', function() {
+            console.log('Server is running on http://127.0.0.1:' + listenPort + ' (UI + Node APIs; Flask is internal only)');
+        });
+    })
+    .catch(function(err) {
+        console.error(err);
+        shutdownFlask();
+        process.exit(1);
+    });

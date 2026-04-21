@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from flask import Flask, request, jsonify
+import os
 import pandas as pd
 from flask_cors import CORS
 
@@ -239,4 +240,5 @@ def stats():
 
 
 if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=5008)
+    _port = int(os.environ.get('FLASK_INTERNAL_PORT', '5008'))
+    app.run(host='127.0.0.1', port=_port)

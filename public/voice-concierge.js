@@ -17,6 +17,16 @@
     var ttsAudio = new Audio();
     var ttsObjectUrl = null;
     var ttsUnlocked = false;
+    var speakGen = 0;
+
+    var useWhisper = true;
+    var mediaRecorder = null;
+    var audioChunks = [];
+    var mediaStream = null;
+    var recGenWhisper = 0;
+    var audioCtx = null;
+    var analyserNode = null;
+    var silenceCheckInterval = null;
 
     var micBtn = document.getElementById('mic-btn');
     var micRing = document.getElementById('mic-ring');
@@ -64,13 +74,19 @@
         currentLang = matched || 'en-US';
         highlightActiveChip();
 
-        if (!speechSupported) {
+        var hasMediaRecorder = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+        if (!hasMediaRecorder && !speechSupported) {
             micLabel.textContent = 'Voice not supported \u2014 use Type Instead below';
             micBtn.disabled = true;
             micBtn.style.opacity = '.35';
             statusText.textContent = 'Voice unavailable';
-        } else {
+            useWhisper = false;
+        } else if (!hasMediaRecorder) {
+            useWhisper = false;
             buildRecognition();
+            statusText.textContent = 'Ready \u2014 ' + langName(currentLang);
+        } else {
+            useWhisper = true;
             statusText.textContent = 'Ready \u2014 ' + langName(currentLang);
         }
 
@@ -201,10 +217,10 @@
     // ═══════════════════════════════════════════════════════════════
 
     function switchLanguage(lang) {
-        if (lang === currentLang && recognition) return;
+        if (lang === currentLang) return;
         currentLang = lang;
         highlightActiveChip();
-        buildRecognition();
+        if (!useWhisper) buildRecognition();
         micLabel.textContent = 'Tap the microphone to speak';
         statusText.textContent = 'Ready \u2014 ' + langName(currentLang);
     }
@@ -225,10 +241,13 @@
     }
 
     // ═══════════════════════════════════════════════════════════════
-    //  SPEECH RECOGNITION
+    //  SPEECH RECOGNITION  (Whisper primary, browser API fallback)
     // ═══════════════════════════════════════════════════════════════
 
     var recGeneration = 0;
+    var watchdogInterval = null;
+    var listenStartedAt = 0;
+    var LISTEN_MAX_MS = 15000;
 
     function buildRecognition() {
         if (recognition) {
@@ -241,34 +260,313 @@
         }
     }
 
-    function attachRecognitionHandlers(rec, gen) {
-        var prevInterim = '';
+    function stopSilenceDetection() {
+        if (silenceCheckInterval) { clearInterval(silenceCheckInterval); silenceCheckInterval = null; }
+        if (analyserNode) { try { analyserNode.disconnect(); } catch (e) {} analyserNode = null; }
+        if (audioCtx && audioCtx.state !== 'closed') { try { audioCtx.close(); } catch (e) {} }
+        audioCtx = null;
+    }
+
+    function stopWhisperRecording() {
+        recGenWhisper++;
+        stopSilenceDetection();
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+            try { mediaRecorder.stop(); } catch (e) {}
+        }
+        if (mediaStream) {
+            mediaStream.getTracks().forEach(function(t) { t.stop(); });
+            mediaStream = null;
+        }
+        mediaRecorder = null;
+        audioChunks = [];
+    }
+
+    function forceCleanup() {
+        clearTimeout(silenceTimer);
+        clearTimeout(maxListenTimer);
+        lastInterim = '';
+        stopWhisperRecording();
+        if (recognition) {
+            recognition.onstart = null;
+            recognition.onresult = null;
+            recognition.onerror = null;
+            recognition.onend = null;
+            try { recognition.abort(); } catch (e) {}
+        }
+        resetMicUI();
+    }
+
+    function toggleMic() {
+        ensureAudioUnlocked();
+        if (synth) synth.cancel();
+        if (isSpeaking) {
+            stopSpeaking();
+        }
+        micBtn.disabled = false;
+        if (isListening) {
+            if (useWhisper) {
+                finishWhisperRecording();
+            } else {
+                recGeneration++;
+                forceCleanup();
+            }
+        } else {
+            startListening();
+        }
+    }
+
+    function startListening() {
+        if (isSending) {
+            micLabel.textContent = 'Wait for response\u2026';
+            return;
+        }
+        if (isSpeaking) {
+            stopSpeaking();
+        }
+
+        if (useWhisper) {
+            startWhisperListening();
+        } else if (speechSupported) {
+            startBrowserListening();
+        } else {
+            micLabel.textContent = 'Voice not supported \u2014 use Type Instead';
+        }
+    }
+
+    // ── Whisper-based recording with auto silence detection ──
+
+    var SILENCE_THRESHOLD = 5;
+    var SILENCE_DURATION_MS = 2000;
+    var MIN_RECORD_MS = 1500;
+
+    function pickMimeType() {
+        var types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/ogg'];
+        for (var i = 0; i < types.length; i++) {
+            if (typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported(types[i])) {
+                return types[i];
+            }
+        }
+        return '';
+    }
+
+    function mimeToExt(mime) {
+        if (mime.indexOf('mp4') !== -1) return 'mp4';
+        if (mime.indexOf('ogg') !== -1) return 'ogg';
+        return 'webm';
+    }
+
+    function startWhisperListening() {
+        stopWhisperRecording();
+        buildRecognition();
+        recGenWhisper++;
+        var myGen = recGenWhisper;
+        audioChunks = [];
+
+        micRing.classList.add('listening');
+        micIcon.style.display = 'none';
+        stopIcon.style.display = 'block';
+        micLabel.textContent = 'Starting mic\u2026';
+        statusText.textContent = 'Starting mic\u2026';
+
+        var constraints = { audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } };
+
+        navigator.mediaDevices.getUserMedia(constraints).then(function(stream) {
+            if (myGen !== recGenWhisper) {
+                stream.getTracks().forEach(function(t) { t.stop(); });
+                return;
+            }
+            mediaStream = stream;
+
+            var analyserReady = false;
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume().catch(function() {});
+                }
+                var source = audioCtx.createMediaStreamSource(stream);
+                analyserNode = audioCtx.createAnalyser();
+                analyserNode.fftSize = 256;
+                analyserNode.smoothingTimeConstant = 0.5;
+                source.connect(analyserNode);
+                analyserReady = true;
+            } catch (e) {
+                analyserReady = false;
+            }
+
+            var mimeType = pickMimeType();
+            var options = mimeType ? { mimeType: mimeType } : {};
+            var actualMime = mimeType || 'audio/webm';
+            var recorder = new MediaRecorder(stream, options);
+            mediaRecorder = recorder;
+
+            recorder.ondataavailable = function(e) {
+                if (e.data && e.data.size > 0) audioChunks.push(e.data);
+            };
+
+            recorder.onstop = function() {
+                if (myGen !== recGenWhisper) return;
+                stopSilenceDetection();
+                stream.getTracks().forEach(function(t) { t.stop(); });
+                mediaStream = null;
+                if (audioChunks.length === 0) {
+                    resetMicUI();
+                    micLabel.textContent = 'No audio \u2014 tap to try again';
+                    return;
+                }
+                var blob = new Blob(audioChunks, { type: actualMime });
+                audioChunks = [];
+                sendToWhisper(blob, myGen, actualMime);
+            };
+
+            recorder.onerror = function() {
+                if (myGen !== recGenWhisper) return;
+                stopSilenceDetection();
+                stream.getTracks().forEach(function(t) { t.stop(); });
+                mediaStream = null;
+                resetMicUI();
+                micLabel.textContent = 'Recording error \u2014 tap to try again';
+            };
+
+            recorder.start(250);
+            isListening = true;
+            micLabel.textContent = 'Listening\u2026';
+            statusText.textContent = 'Listening (' + langName(currentLang) + ')';
+
+            var speechDetected = false;
+            var silentSince = 0;
+            var recordStart = Date.now();
+
+            if (analyserReady && analyserNode) {
+                var freqData = new Uint8Array(analyserNode.frequencyBinCount);
+                silenceCheckInterval = setInterval(function() {
+                    if (myGen !== recGenWhisper || !isListening) {
+                        stopSilenceDetection();
+                        return;
+                    }
+
+                    var elapsed = Date.now() - recordStart;
+                    if (elapsed < MIN_RECORD_MS) return;
+
+                    try {
+                        analyserNode.getByteFrequencyData(freqData);
+                    } catch (e) {
+                        stopSilenceDetection();
+                        return;
+                    }
+                    var sum = 0;
+                    for (var i = 0; i < freqData.length; i++) sum += freqData[i];
+                    var avg = sum / freqData.length;
+
+                    if (avg > SILENCE_THRESHOLD) {
+                        speechDetected = true;
+                        silentSince = 0;
+                    } else if (speechDetected) {
+                        if (!silentSince) silentSince = Date.now();
+                        if (Date.now() - silentSince >= SILENCE_DURATION_MS) {
+                            finishWhisperRecording();
+                        }
+                    }
+                }, 150);
+            }
+
+            maxListenTimer = setTimeout(function() {
+                if (myGen !== recGenWhisper || !isListening) return;
+                finishWhisperRecording();
+            }, LISTEN_MAX_MS);
+
+        }).catch(function(err) {
+            if (myGen !== recGenWhisper) return;
+            resetMicUI();
+            if (err.name === 'NotAllowedError') {
+                micLabel.textContent = 'Microphone access denied';
+                statusText.textContent = 'Mic blocked \u2014 use Type Instead';
+            } else {
+                micLabel.textContent = 'Mic failed \u2014 tap to retry';
+            }
+        });
+    }
+
+    function finishWhisperRecording() {
+        clearTimeout(maxListenTimer);
+        stopSilenceDetection();
+        isListening = false;
+        micRing.classList.remove('listening');
+        micIcon.style.display = 'block';
+        stopIcon.style.display = 'none';
+        micLabel.textContent = 'Processing\u2026';
+        statusText.textContent = 'Transcribing\u2026';
+        if (mediaRecorder && mediaRecorder.state === 'recording') {
+            try { mediaRecorder.requestData(); } catch (e) {}
+            setTimeout(function() {
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    try { mediaRecorder.stop(); } catch (e) {}
+                }
+            }, 100);
+        } else {
+            resetMicUI();
+        }
+    }
+
+    function sendToWhisper(blob, gen, mime) {
+        var ext = mimeToExt(mime || '');
+        var filename = 'audio.' + ext;
+
+        var formData = new FormData();
+        formData.append('audio', blob, filename);
+        formData.append('lang', currentLang);
+
+        fetch('/api/transcribe', {
+            method: 'POST',
+            body: formData,
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (gen !== recGenWhisper) return;
+            var text = (data.text || '').trim();
+            var hallucinations = /^(sous-?titr|subtitl|untertitel|音声|字幕|请订阅|ご視聴|MBC |SBS |KBS |www\.|http|Abone ol|Altyaz|Amara\.org|Merci d'avoir regard)/i;
+            if (!text || text === '.' || text === '...' || text.length < 2 || hallucinations.test(text)) {
+                resetMicUI();
+                micLabel.textContent = 'Didn\u2019t catch that \u2014 tap to try again';
+                return;
+            }
+            micLabel.textContent = text;
+            resetMicUI();
+            onUserSpeech(text);
+        })
+        .catch(function(err) {
+            if (gen !== recGenWhisper) return;
+            resetMicUI();
+            micLabel.textContent = 'Error \u2014 tap to try again';
+        });
+    }
+
+    // ── Browser SpeechRecognition (fallback only) ──
+
+    function startBrowserListening() {
+        buildRecognition();
+        recGeneration++;
+        var gen = recGeneration;
+
+        micRing.classList.add('listening');
+        micIcon.style.display = 'none';
+        stopIcon.style.display = 'block';
+        micLabel.textContent = 'Starting\u2026';
+        statusText.textContent = 'Starting mic\u2026';
+
+        var rec = new SpeechRecognition();
+        rec.continuous = false;
+        rec.interimResults = true;
+        rec.lang = currentLang;
+        rec.maxAlternatives = 1;
+        recognition = rec;
+
         var speechHandled = false;
 
         rec.onstart = function() {
             if (gen !== recGeneration) return;
             isListening = true;
-            lastInterim = '';
-            prevInterim = '';
-            speechHandled = false;
-            micRing.classList.add('listening');
-            micIcon.style.display = 'none';
-            stopIcon.style.display = 'block';
             micLabel.textContent = 'Listening\u2026';
             statusText.textContent = 'Listening (' + langName(currentLang) + ')';
-
-            clearTimeout(maxListenTimer);
-            maxListenTimer = setTimeout(function() {
-                if (gen !== recGeneration || !isListening) return;
-                if (lastInterim && !speechHandled) {
-                    speechHandled = true;
-                    var text = lastInterim.trim();
-                    lastInterim = '';
-                    clearTimeout(silenceTimer);
-                    if (text) onUserSpeech(text);
-                }
-                try { rec.stop(); } catch (e) {}
-            }, 12000);
         };
 
         rec.onresult = function(event) {
@@ -286,58 +584,43 @@
             if (final) {
                 speechHandled = true;
                 clearTimeout(silenceTimer);
-                clearTimeout(maxListenTimer);
-                lastInterim = '';
                 micLabel.textContent = final.trim();
                 onUserSpeech(final.trim());
-                setTimeout(function() {
-                    if (isListening && gen === recGeneration) {
-                        try { rec.stop(); } catch (e) {}
-                    }
-                }, 300);
+                try { rec.stop(); } catch (e) {}
+                setTimeout(function() { if (gen === recGeneration) forceCleanup(); }, 500);
                 return;
             }
 
             if (interim) {
                 micLabel.textContent = interim;
                 lastInterim = interim;
-
-                if (interim !== prevInterim) {
-                    prevInterim = interim;
-                    clearTimeout(silenceTimer);
-                    silenceTimer = setTimeout(function() {
-                        if (gen !== recGeneration || !isListening || speechHandled || !lastInterim) return;
-                        speechHandled = true;
-                        var text = lastInterim.trim();
-                        lastInterim = '';
-                        clearTimeout(maxListenTimer);
-                        if (text) onUserSpeech(text);
-                        try { rec.stop(); } catch (e) {}
-                    }, 2000);
-                }
+                clearTimeout(silenceTimer);
+                silenceTimer = setTimeout(function() {
+                    if (gen !== recGeneration || speechHandled || !lastInterim) return;
+                    speechHandled = true;
+                    var text = lastInterim.trim();
+                    lastInterim = '';
+                    if (text) onUserSpeech(text);
+                    try { rec.stop(); } catch (e) {}
+                    setTimeout(function() { if (gen === recGeneration) forceCleanup(); }, 500);
+                }, 3500);
             }
         };
 
         rec.onerror = function(event) {
             if (gen !== recGeneration) return;
             clearTimeout(silenceTimer);
-            clearTimeout(maxListenTimer);
-            lastInterim = '';
             resetMicUI();
-            if (event.error === 'no-speech') {
-                micLabel.textContent = 'No speech detected \u2014 tap to try again';
-            } else if (event.error === 'not-allowed') {
+            if (event.error === 'not-allowed') {
                 micLabel.textContent = 'Microphone access denied';
-                statusText.textContent = 'Mic blocked \u2014 use Type Instead';
             } else if (event.error !== 'aborted') {
-                micLabel.textContent = 'Error \u2014 tap to try again';
+                micLabel.textContent = 'Tap the microphone to speak';
             }
         };
 
         rec.onend = function() {
             if (gen !== recGeneration) return;
             clearTimeout(silenceTimer);
-            clearTimeout(maxListenTimer);
             if (lastInterim && !speechHandled) {
                 speechHandled = true;
                 var text = lastInterim.trim();
@@ -347,93 +630,27 @@
             lastInterim = '';
             resetMicUI();
         };
-    }
-
-    function toggleMic() {
-        ensureAudioUnlocked();
-        if (synth) synth.cancel();
-        if (isSpeaking) {
-            stopSpeaking();
-        }
-        if (isListening) {
-            clearTimeout(silenceTimer);
-            clearTimeout(maxListenTimer);
-            lastInterim = '';
-            recGeneration++;
-            if (recognition) {
-                recognition.onstart = null;
-                recognition.onresult = null;
-                recognition.onerror = null;
-                recognition.onend = null;
-                try { recognition.stop(); } catch (e) {}
-            }
-            resetMicUI();
-        } else {
-            startListening();
-        }
-    }
-
-    function startListening() {
-        if (!speechSupported || isSending) return;
-        buildRecognition();
-        recGeneration++;
-        var gen = recGeneration;
-
-        micRing.classList.add('listening');
-        micIcon.style.display = 'none';
-        stopIcon.style.display = 'block';
-        micLabel.textContent = 'Starting\u2026';
-        statusText.textContent = 'Starting mic\u2026';
 
         var startTimeout = setTimeout(function() {
             if (gen !== recGeneration) return;
-            resetMicUI();
+            try { rec.abort(); } catch (e) {}
+            forceCleanup();
             micLabel.textContent = 'Mic failed \u2014 tap to retry';
         }, 5000);
+        rec.onstart = (function(origOnStart) {
+            return function() {
+                clearTimeout(startTimeout);
+                if (gen !== recGeneration) return;
+                isListening = true;
+                micLabel.textContent = 'Listening\u2026';
+                statusText.textContent = 'Listening (' + langName(currentLang) + ')';
+            };
+        })(rec.onstart);
 
-        var rec = new SpeechRecognition();
-        rec.continuous = false;
-        rec.interimResults = true;
-        rec.lang = currentLang;
-        rec.maxAlternatives = 1;
-        recognition = rec;
-
-        var origOnStart = null;
-        attachRecognitionHandlers(rec, gen);
-        origOnStart = rec.onstart;
-        rec.onstart = function() {
+        try { rec.start(); } catch (e) {
             clearTimeout(startTimeout);
-            if (origOnStart) origOnStart.call(this);
-        };
-
-        try {
-            rec.start();
-        } catch (e) {
-            clearTimeout(startTimeout);
-            if (gen === recGeneration) {
-                setTimeout(function() {
-                    if (gen !== recGeneration) return;
-                    try {
-                        var rec2 = new SpeechRecognition();
-                        rec2.continuous = false;
-                        rec2.interimResults = true;
-                        rec2.lang = currentLang;
-                        rec2.maxAlternatives = 1;
-                        recognition = rec2;
-                        attachRecognitionHandlers(rec2, gen);
-                        var origOnStart2 = rec2.onstart;
-                        rec2.onstart = function() {
-                            clearTimeout(startTimeout);
-                            if (origOnStart2) origOnStart2.call(this);
-                        };
-                        rec2.start();
-                    } catch (e2) {
-                        clearTimeout(startTimeout);
-                        resetMicUI();
-                        micLabel.textContent = 'Mic failed \u2014 tap to retry';
-                    }
-                }, 300);
-            }
+            forceCleanup();
+            micLabel.textContent = 'Mic failed \u2014 tap to retry';
         }
     }
 
@@ -522,7 +739,7 @@
                 appendTextChatBubble('assistant', cleanReply);
             }
 
-            speak(cleanReply, currentLang);
+            speak(cleanReply, currentLang, data.ttsKey);
         } catch (e) {
             clearTyping();
             var err = "Sorry, something went wrong. Please try again.";
@@ -540,7 +757,7 @@
         if (currentLang.indexOf('en') === 0) {
             return '[IMPORTANT: The customer is speaking English. Reply in English.]';
         }
-        return '[IMPORTANT: The customer is speaking ' + name + '. You MUST reply ENTIRELY in ' + name + ', INCLUDING translating all menu item names into ' + name + '. Do NOT use English menu names — translate them naturally. Switch to ' + name + ' NOW.]';
+        return '[IMPORTANT: The customer is speaking ' + name + '. Reply 100% in ' + name + '. ZERO English words allowed — translate ALL menu names, ALL descriptions, ALL cooking terms, ALL adjectives into ' + name + '. Words like "special", "served", "grilled", "thinly sliced", "fresh", "homemade" MUST be in ' + name + ', never in English.]';
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -624,9 +841,11 @@
         micRing.classList.remove('speaking');
     }
 
-    function speak(text, lang) {
+    function speak(text, lang, ttsKey) {
         if (!text) return;
         stopSpeaking();
+        speakGen++;
+        var myGen = speakGen;
         var targetLang = lang || currentLang;
 
         isSpeaking = true;
@@ -636,37 +855,49 @@
         fetch('/api/tts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: text, lang: targetLang }),
+            body: JSON.stringify({ text: text, lang: targetLang, ttsKey: ttsKey || '' }),
         })
         .then(function(r) {
             if (!r.ok) throw new Error('TTS failed');
             return r.blob();
         })
         .then(function(blob) {
-            if (!isSpeaking) return;
+            if (myGen !== speakGen) return;
             if (ttsObjectUrl) URL.revokeObjectURL(ttsObjectUrl);
             ttsObjectUrl = URL.createObjectURL(blob);
 
             ttsAudio.onended = function() {
                 ttsAudio.onerror = null;
-                isSpeaking = false;
-                micRing.classList.remove('speaking');
-                if (!isSending) statusText.textContent = 'Ready \u2014 ' + langName(currentLang);
+                if (myGen === speakGen) {
+                    isSpeaking = false;
+                    micRing.classList.remove('speaking');
+                    if (!isSending) statusText.textContent = 'Ready \u2014 ' + langName(currentLang);
+                }
             };
             ttsAudio.onerror = function() {
                 ttsAudio.onerror = null;
-                browserSpeak(text, targetLang);
+                if (myGen === speakGen) {
+                    isSpeaking = false;
+                    micRing.classList.remove('speaking');
+                    if (!isSending) statusText.textContent = 'Ready \u2014 ' + langName(currentLang);
+                }
             };
             ttsAudio.src = ttsObjectUrl;
-            ttsAudio.play().then(function() {
+            ttsAudio.play().catch(function() {
                 ttsAudio.onerror = null;
-            }).catch(function() {
-                ttsAudio.onerror = null;
-                browserSpeak(text, targetLang);
+                if (myGen === speakGen) {
+                    isSpeaking = false;
+                    micRing.classList.remove('speaking');
+                    if (!isSending) statusText.textContent = 'Ready \u2014 ' + langName(currentLang);
+                }
             });
         })
         .catch(function() {
-            browserSpeak(text, targetLang);
+            if (myGen === speakGen) {
+                isSpeaking = false;
+                micRing.classList.remove('speaking');
+                if (!isSending) statusText.textContent = 'Ready \u2014 ' + langName(currentLang);
+            }
         });
     }
 
@@ -768,7 +999,7 @@
             history.push({ role: 'assistant', content: cleanReply });
             addTranscriptBubble('assistant', cleanReply);
             appendTextChatBubble('assistant', cleanReply);
-            speak(cleanReply, currentLang);
+            speak(cleanReply, currentLang, data.ttsKey);
         } catch (e) {
             clearTyping();
             var err = "Sorry, something went wrong. Please try again.";
@@ -820,13 +1051,11 @@
     }
 
     function addItemToCart(requestedName) {
+        if (!requestedName || requestedName.toLowerCase() === 'none') return;
         var found = findMenuItem(requestedName);
         if (found && window.madoCart) {
             window.madoCart.add(found.name, found.price.toFixed(2), found.category);
             showToast('\u2705 ' + found.name + ' added to cart \u2014 $' + found.price.toFixed(2));
-        } else if (window.madoCart) {
-            window.madoCart.add(requestedName, '0.00', '');
-            showToast('\u2705 ' + requestedName + ' added to cart');
         }
     }
 
@@ -838,23 +1067,35 @@
             if (menuItems[i].name.toLowerCase() === lower) return menuItems[i];
         }
 
+        var containsMatches = [];
         for (var j = 0; j < menuItems.length; j++) {
-            if (menuItems[j].name.toLowerCase().indexOf(lower) !== -1 ||
-                lower.indexOf(menuItems[j].name.toLowerCase()) !== -1) {
-                return menuItems[j];
+            var itemLower = menuItems[j].name.toLowerCase();
+            if (itemLower.indexOf(lower) !== -1 || lower.indexOf(itemLower) !== -1) {
+                containsMatches.push(menuItems[j]);
             }
+        }
+        if (containsMatches.length > 0) {
+            containsMatches.sort(function(a, b) {
+                return Math.abs(a.name.length - name.length) - Math.abs(b.name.length - name.length);
+            });
+            return containsMatches[0];
         }
 
         var bestScore = 0;
         var bestItem = null;
+        var bestLen = Infinity;
         var nameWords = lower.split(/\s+/);
         for (var k = 0; k < menuItems.length; k++) {
-            var itemLower = menuItems[k].name.toLowerCase();
+            var kLower = menuItems[k].name.toLowerCase();
             var score = 0;
             nameWords.forEach(function(w) {
-                if (w.length > 2 && itemLower.indexOf(w) !== -1) score++;
+                if (w.length > 2 && kLower.indexOf(w) !== -1) score++;
             });
-            if (score > bestScore) { bestScore = score; bestItem = menuItems[k]; }
+            if (score > bestScore || (score === bestScore && score > 0 && menuItems[k].name.length < bestLen)) {
+                bestScore = score;
+                bestItem = menuItems[k];
+                bestLen = menuItems[k].name.length;
+            }
         }
         if (bestScore > 0) return bestItem;
 
